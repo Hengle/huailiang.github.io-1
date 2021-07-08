@@ -5,7 +5,6 @@ date:       2018-03-19 02:00:00
 author:     "Huailiang"
 tags:
     - 人工智能
-    - Unity
 ---
 
 
@@ -36,7 +35,7 @@ q-learning的伪代码先看这部分，很重要
 
 公式描述：
 
-![](/img/post-reinforcement/re1.jpg)
+$$ \underset{s \leftarrow s^\prime}{\operatorname{Q(s, a)}}\leftarrow Q(s, a) + \alpha[r + \gamma \max_{a^\prime}{Q(s^\prime, a^\prime)}- Q(s,a)]  $$
 
 GAMMA(gamma 是对未来 reward（分数） 的衰减值)，ALPHA(学习率)，EPSILON(策略)
 
@@ -307,4 +306,4 @@ Reinforcement做选择还是和之前一样，由 epsilon概率来由 q_table �
 
 [i1]:https://github.com/huailiang/bird
 [i2]:https://static.hdslb.com/miniloader.swf?aid=16921335&p=1
-[i3]:https://huailiang.github.io/2018/03/02/mlearn/
+[i3]:/blog/2018/mlearn/

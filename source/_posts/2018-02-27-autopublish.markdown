@@ -5,7 +5,6 @@ date:       2018-02-27 12:00:00
 author:     "Huailiang"
 tags:
     - 工具
-    - OSX
 ---
 
 
@@ -78,7 +77,7 @@ new Date().format("yyyyMMddHHmmss")
 
 获取所有的分支：
 
-``` python 
+``` groovy 
 def cmd = 'git ls-remote --heads git@git.intra.123u.com:dragon_nest/dragon-nest.git'
 def proc = cmd.execute()
 proc.waitFor()
@@ -147,7 +146,6 @@ fi
 #!/bin/bash
 
 echo "打包参数 channel is:"${uid}
-
 ```
 
 
@@ -156,6 +154,130 @@ echo "打包参数 channel is:"${uid}
 目前Jenkins上的插件（Plugin）很多, 且质量参差不齐。比如说git、邮件、通知Notificatioin。作者这里认为都没有必要装，很多东西都是几行shell就搞定了，出了问题也好比较排查。
 
 如果你需要每个平台打包相关的脚本，你可以点击[这里][i4]。
+
+
+## 定时触发任务
+
+有时候 我们需要打包机在夜里下班的时候自动打包，第二天上班的时候，能够自动获取出好的版本，或者知悉不能打包出错的原因（通过查看打包日志）
+
+cron，是一个Linux定时执行工具，可以在无需人工干预的情况下运行作业。通过脚本在每天的同一时间运行或者每周一次、每月一次触发任务。 但由于一般我们的打包机器都是部署在MacOS上， 这里我更倾向于使用mac原生的launchctl来实现。
+
+
+首先需要编写plist文件
+
+![](/img/post-publish/plist.jpg)
+
+可以使用plutil -lint来验证plist的格式是否正确（这只是代表plist格式正确，不代表里面的命令是有效的）
+
+plist文件里具体的key可以参考：
+
+[苹果官方文档：The Mac OS X launchd plist format][i10]
+
+上图使用的定时脚本为test.sh, 在test.sh 里调用打包的job。 需要将test.sh置为可执行文件，可用命令：
+
+```sh
+chmod a+x test.sh
+```
+
+shell 调用Jenkins上的job可以使用curl命令：
+
+```sh
+# 先拿到crumb user是用户名 token-api可以在jenkins-user面板查看 
+CRUMB=$(curl -s 'http://user:token-api@127.0.0.1:8080/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,":",//crumb)')
+
+# post的参数之间记得加转义字符\ 否则只能传一个参数过去 用户名和密码换成自己的
+curl -v -X POST -H ${CRUMB} -H 'Content-Type: application/json' \
+--user user:password \
+http://127.0.0.1:8080/job/buildWithParameters?branch=master\&clean=true\&token=abc123
+```
+
+mac 上开启定时任务命令:
+
+加载任务
+```sh
+launchctl load ***.plist 
+```
+
+删除任务
+
+```sh
+launchctl unload ***.plist
+```
+
+查看任务列表 
+```
+launchctl list 
+```
+
+查看的时候列表会显示很多， 建议过滤一下：
+
+```sh
+# 任务的名字对应的是plist的Program字段
+launchctl list | grep '任务的部分名字'
+```
+
+
+
+## Jenkins 分布式部署
+
+Jenkins的分布式构建，在Jenkins的配置中叫做节点，分布式构建能够让同一套代码或项目在不同的环境(如：Windows7\winxp和Linux系统)中编译、部署等。
+
+当我们使用多台服务器时，并且配置了tomcat或jboss集群服务，可通过jenkins的节点配置，将jenkins项目发布在不同服务器上（分布jenkins工作空间，部署项目到不同服务器的tomcat或jboss），这就形成了jenkins的分布式。节点服务器不需要安装jenkins（只需要运行一个slave节点服务），构建事件的分发由master端（jenkins主服务）来执行。
+
+__注意：__ 如果节点主机上不存在JDK，Jenkins会去自动下载，但Oracle对程序自动下载做了限制，会导致下载失败，然后一直循环这个问题。
+
+__建议：__ 所有Linux或者Windows机器的环境路径统一(如：JDK、Maven)，安装位置和jenkins所在服务器的JDK和maven必须一致，也就是说jenkins所在服务器和各个节点服务器中的JDK和Maven目录和文件名都是一样的。以便于管理、不容易出现问题。
+
+
+#### 节点管理
+
+##### １、新建节点
+
+![](/img/post-publish/re1.png)
+
+![](/img/post-publish/re3.png)
+
+##### ２、配置
+
+![](/img/post-publish/re2.png)
+
+##### ３、下载 安装节点服务
+
+![](/img/post-publish/re5.png)
+
+--点击Launch，下载文件为slave-agent.jnlp
+
+![](/img/post-publish/re10.png)
+
+--将slave-agent.jnlp文件复制到远程服务器的远程工作目录D：\jenkins9下
+
+--双击运行slave-agent.jnlp，如果如法运行，在cmd命令中输入Javaws D:\jenkins9\slave-agent.jnlp
+
+--运行过程如下所示：
+
+![](/img/post-publish/re4.png)
+
+--点击运行：
+
+![](/img/post-publish/re6.png)
+
+--显示Connected，即表示此节点创建成功。
+
+##### ４、将这个节点加入服务
+
+　　上面的窗口关闭或者电脑重启后，这个节点也就关闭了，所以最好把这个节点加入window服务。    　点击窗口的file菜单，点击Install as a service,完成
+
+![](/img/post-publish/re8.png)
+
+成功示例：（红框所示）　
+
+![](/img/post-publish/re9.png)
+
+
+制作job的时候， 指定对应node的agent, 通过下图：
+
+![](/img/post-publish/re11.jpg)
+
 
 ## 自制PHP站点,满足更加复杂的流程
 
@@ -179,10 +301,23 @@ php 调用 shell_exec函数来调用 shell, 在实际部署的时候请记得保
 
 使用 web 方式来打包是相当便利的。任何人员都能很快的上手，基本上不需要给运维人员培训，程序员也可以省下更多的精力，来做游戏本省的开发。而且web 的方式也不局限于平台的限制，Windows、Mac、手机上都可以随时随地的Do Job。
 
+
+__参考:__
+
+* [Jenkins的分布式构建及部署—节点][i5]
+* [Jenkins 官方网站][i6]
+* [jenkins分布式配置方式][i7]
+* [MacOS 定时任务][i8]
+* [Cron Linux定时执行工具][i9]
+
+
 [i1]: http://appleinsider.com/articles/08/10/03/latest_iphone_software_supports_full_screen_web_apps.html
-
 [i2]: http://docs.groovy-lang.org/latest/html/api/groovy/util/GroovyScriptEngine.html
-
 [i3]: https://www.jianshu.com/p/dc6f3fea7aa9
-
 [i4]: https://github.com/huailiang/batch_build
+[i5]: https://www.linuxidc.com/Linux/2015-05/116903.htm
+[i6]: https://jenkins.io
+[i7]: https://www.cnblogs.com/benben-wu/p/11713295.html
+[i8]: https://my.oschina.net/shede333/blog/470377
+[i9]: https://blog.csdn.net/zhizhengguan/article/details/88552501
+[i10]: https://developer.apple.com/library/mac/documentation/Darwin/Reference/ManPages/man5/launchd.plist.5.html

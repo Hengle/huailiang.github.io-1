@@ -1,0 +1,347 @@
+---
+layout:     post
+title:      "游戏中口型动画合成系统"
+date:       2020-04-02 02:00:00
+author:     "huailiang"
+tags:
+    - 人工智能
+---
+
+
+>近年来， 基于语音驱动的人脸动画技术在虚拟主持人、数字娱乐、人机交互以及远程会议等方面有广泛的应用。如何快速、高效的实现语音驱动的唇形自动合成，以及优化语音与唇形面部表情之间的同步是此项技术的关键。表情动画作为语音驱动人脸动画的一部分，在增加人脸动画逼真性方面起着重要的作用，但已有的工作没 有定量分析人脸表情动 画与语音之间的关系.
+
+目前音视频模型主要集中在矢量量化的方法 (VQ)、神经网络(Neural Network，NN)、高斯混合模型 (Gaussian Mixture Mode1．GMM)、隐马尔可夫模型现代计算机2015．05中 (Hidden Markov ModeL HMM)和动态贝叶斯模型(Dv．namic Bayesian Network，DBN)的探索 ，而人脸模型主要集中在基于图像的模型、基于2D模型和基于3D模型的探索。
+
+
+<div style="width: 100%;height: 400px;">
+    <iframe src="//player.youku.com/embed/XNzA2NDM1MTg4==?client_id=d0b1b77a17cded3b" width="100%" height="100%" frameborder="0" allowfullscreen="true"></iframe>
+</div> 
+
+*来自Annosoft公司的AutoLip-Sync语音-嘴唇动画*
+
+<br>
+
+
+今天主要介绍的是两种语音口型动画的实现， 两种都是先从音频文件(.wav .mp3)提取出音素（主要是元音), 然后再根据不同的音素去制作不同的口型，最后不同口型之间差值得到连续的动作。
+
+* __基于共振峰提取元音__
+* __基于神经网络提取音素__
+
+## 基于共振峰提取元音
+
+这里先简单介绍一下人类发声的原理。
+
+人在发声时，肺部收缩送出一股直流空气，经器官流至喉头声门处（即声带），使声带产生振动，并且具有一定的振动周期，从而带动原先的空气发生振动，这可以称为气流的激励过程。之后，空气经过声带以上的主声道部分（包括咽喉、口腔）以及鼻道（包括小舌、鼻腔），不同的发音会使声道的肌肉处在不同的部位，这形成了各种语音的不同音色，这可以称为气流在声道的冲激响应过程。
+
+
+
+对于语音识别来说，重要的部分是第二个过程，因为口型就是声道形状的一部分。而这一冲激响应过程，在频谱上的表现为若干个凸起的包络峰。这些包络峰出现的频率，就被称为共振峰频率，简称为共振峰。
+
+![](/img/post-vr/mou7.jpg)
+
+发前元音时舌的最高部位移向口腔前部并稍许拱起。后元音发音时舌后部向软腭抬起。舌面的位置和唇的形状是元音分类的一个标准。发音时从肺部呼出的气流通过起共鸣器作用的口腔，发出阻力极小并无摩擦声音的语音。尽管在一般情况下发元音时声带都振动，但也可使声带不振动，发成清音或耳语音。
+
+*元音的高低，取决于舌面与上腭的距离，而非嘴巴的张合大小，因为嘴巴的张合大小不一定可以引起舌面的高低。如发 [æ] 时，舌面与上腭的距离较 [ɛ]大*
+
+### 1. 从音频文件获取语音数据
+
+从AudioSource处获取是实时匹配时采用的方法。AudioSource本身提供了一个GetOutputData函数，可以获取当前正在播放的语音数据段。 从AudioClip处获取是烘焙是采用的方法。AudioClip本身其实是对语音文件的一个封装，可以使用GetData函数直接获得语音数据。 这过程中也包含了分帧与窗口化的步骤。
+
+### 2. 剔除无声帧
+
+从信号处理的角度上说，这一步是一种时域分析方法。对数据帧中的所有值进行求和，如果结果大于用户预设的一个阈值（也就是AmplitudeThreshold），那么就认为这一帧是没有声音的，不对它进行后续处理。这可以节省不必要的分析过程。如果适当调高阈值，一定程度上可以降噪。
+
+### 3. 获取语音数据的频域信息
+
+你在使用一些音乐播放器时，有时候会看到一根根跳动的长条，这就是“频谱”的一种表现方式，频域信息指的就是频谱。这对于语音识别来说是非常重要的信息。 在Unity提供的API AudioSource的GetSpecturmData可以高效地获取当前播放的语音数据频谱。 如果你的项目使用了fmod的开发环境，可以使用如下获取声谱信息：
+```cs
+public StudioEventEmitter emiter;
+FMOD.DSP m_FFTDsp;
+FMOD.ChannelGroup master;
+FMOD.DSP mixerHead;
+
+void Start() {
+    emiter.Play();
+    InitDsp();
+}
+
+void InitDsp() {
+    // 初始化均衡器 DSP
+    RuntimeManager.CoreSystem.createDSPByType(FMOD.DSP_TYPE.FFT, out m_FFTDsp);
+    m_FFTDsp.setParameterInt((int)FMOD.DSP_FFT.WINDOWTYPE, (int)FMOD.DSP_FFT_WINDOW.HANNING);
+    m_FFTDsp.setParameterInt((int)FMOD.DSP_FFT.WINDOWSIZE, windowSize);
+    RuntimeManager.CoreSystem.getMasterChannelGroup(out master);
+    var m_Result = master.addDSP(FMOD.CHANNELCONTROL_DSP_INDEX.HEAD, m_FFTDsp);
+    m_Result = master.getDSP(0, out mixerHead);
+    mixerHead.setMeteringEnabled(true, true);
+}
+
+void Update() {
+    string result = null;
+    IntPtr unmanagedData;
+    uint length;
+    m_FFTDsp.getParameterData((int)FMOD.DSP_FFT.SPECTRUMDATA, out unmanagedData, out length);
+    FMOD.DSP_PARAMETER_FFT fftData = (FMOD.DSP_PARAMETER_FFT)Marshal.PtrToStructure(unmanagedData, typeof(FMOD.DSP_PARAMETER_FFT));
+    if (fftData.spectrum != null && fftData.spectrum.Length > 0)
+    {
+        playingAudioSpectrum = fftData.spectrum[0]; //声谱信息，针对立体音 只获取0声道频谱
+    }
+}
+```
+
+语音信号一般在10ms到30ms之间，我们可以把它看成是平稳的。为了处理语音信号，我们要对语音信号进行加窗，也就是一次仅处理窗中的数据。因为实际的语音信号是很长的，我们不能也不必对非常长的数据进行一次性处理。明智的解决办法就是每次取一段数据，进行分析，然后再取下一段数据。
+
+Hanning窗函数：
+
+$$
+W(n) = 0.5 *(1.0 - \cos (n/N))
+$$
+
+
+拿到声谱之后， 我们先使用一个[高斯滤波器][i13]过滤掉噪音。通俗的讲，高斯滤波就是对整声谱进行加权平均的过程，每一个点的值，都由其本身和邻域内的其他像素值经过加权平均后得到。
+
+$$
+G(x) = \frac{1}{\sqrt{2\pi}\sigma} e^{-\frac{(x-\mu)^2}{2\sigma^2}}
+$$
+
+其中$\mu$, $\sigma(\sigma>0)$为常数， 则称X服从参数为$\mu$, $\sigma(\sigma>0)$的正态分布或者高斯分布。
+
+对于离线处理的音频可以借助了一个数学工具——离散余弦变换（[DCT][i12]），它可以用来获取一个时域信息段的频域信息。它与另一个著名的数学工具——傅里叶变换是等价的，所不同的是余弦变换只获取频率信息，而舍弃了相位信息。实际上这就够了，我们并不需要相位信息。
+
+__一维DCT变换：__
+
+$$
+F(u) = c(u) \sum^{N-1}_{i=0} f(i) cos \left[ \frac{(i+0.5)\pi}{N} u \right]
+$$
+
+$$
+c(u) = \left\{
+\begin{aligned}
+\sqrt{ \frac{1}{N}}, {u=0}   \\
+\sqrt{ \frac{2}{N}}, {u \neq 0}
+\end{aligned}
+\right.
+$$
+
+其中，f(i)为原始的信号，F(u)是DCT变换后的系数，N为原始信号的点数，c(u)可以认为是一个补偿系数，可以使DCT变换矩阵为正交矩阵
+
+__二维DCT变换：__
+
+$$
+F(u,v) = c(u)c(v) \sum^{N-1}_{i=0} f(i,j) cos\left[ {\frac{(i+0.5)\pi}{N}u}\right]
+    cos \left[  {\frac{(j+0.5)\pi}{N}v} \right]
+$$
+
+$$
+c(u) = \left\{
+\begin{aligned}
+\sqrt{ \frac{1}{N}}, {u=0}   \\
+\sqrt{ \frac{2}{N}}, {u \neq 0}
+\end{aligned}
+\right.
+$$
+
+声音是不像图像， 是一维序列。因此这里应用的是一维DCT变换。 [github][i11]示例工程里对应的代码如下：
+
+```cs
+public static float[] DiscreteCosineTransform(float[] data)
+{
+    float[] result = new float[data.Length];
+    float sumCos;
+    for (int m = 0; m < data.Length; ++m)
+    {
+        sumCos = 0.0f;
+        for (int k = 0; k < data.Length; ++k)
+        {
+            sumCos += data[k] * Mathf.Cos((Mathf.PI / data.Length) * m * (k + 0.5f));
+        }
+        result[m] = (sumCos > 0) ? sumCos : -sumCos;
+    }
+    return result;
+}
+```
+
+### 4. 提取共振峰
+
+ 一般来说，通过求得一段语音数据的第一、第二共振峰，就可以非常精确地得知这段语音的"元音"是什么。只求第一共振峰，也可以知道大致结果。提取共振峰的方法是，在前一步骤中获取的频谱上求出局部最大值的最大值.
+
+```cs
+public static void FindLocalLargestPeaks(float[] data, float[] peakValue, int[] peakPosition)
+{
+    int peakNum = 0;
+    float lastPeak = 0.0f;
+    int lastPeakPosition = 0;
+    bool isIncreasing = false;
+    bool isPeakIncreasing = false;
+
+    for (int i = 0; i < data.Length - 1; ++i) {
+        if (data[i] < data[i + 1]) {
+            isIncreasing = true;
+        }
+        else {
+            if (isIncreasing) {
+                if (lastPeak < data[i])  // Peak found.
+                {
+                    isPeakIncreasing = true;
+                } else {
+                    if (isPeakIncreasing) {
+                        peakValue[peakNum] = lastPeak; // Local largest peak found. 
+                        peakPosition[peakNum] = lastPeakPosition;
+                        ++peakNum;
+                    }
+                    isPeakIncreasing = false;
+                }
+                lastPeak = data[i];
+                lastPeakPosition = i;
+            }
+            isIncreasing = false;
+        }
+        if (peakNum >= peakValue.Length) break;
+    }
+}
+```
+
+提取语音共振峰的方法比较多，除了使用最大值法，常用的方法还有倒谱法、LPC（线性预测编码）谱估计法、LPC倒谱法等。
+
+
+### 5. 制作元音口型
+
+一般改变口型都是通过BlendShape， 也可以改变骨骼，或者通过Live2D。通过每帧控制参数来调节口型。例如BlendShape, 五个口型对应到日语的五个元音。在Update里分析每一帧的声谱，通过共振峰提取得到相应的元音， 然后插值表现相应的口型。通过[github][i11]下载工程，本地运行同样的效果。
+
+![](/img/post-vr/mou1.jpg)
+
+<br>
+
+最后的效果就是下面展示的视频所示:
+
+<iframe src="//player.bilibili.com/player.html?aid=497979009&bvid=BV1BK411578P&cid=184441588&page=1" scrolling="no" width="680" height="500" frameborder="no" framespacing="0" allowfullscreen="true"> </iframe>
+
+
+<iframe src="//player.bilibili.com/player.html?aid=287531324&bvid=BV1Qf4y1B7rW&cid=250890246&page=1" scrolling="no"  width="680" height="500"  frameborder="no" framespacing="0" allowfullscreen="true"> </iframe>
+
+<br>
+
+作者体验下来， 这套系统对日语有很好的的支持， 但对中文支持的却并不是那么的友好，分析下来发现， 日语之所以表现良好， 是因为元音的个数只有五个，非常的少。 普通话有三十九个韵母。韵母主要由元音构百成，也有的由元音加鼻辅音构成。韵母按结构可分单元音韵母、复元音韵母和带鼻音韵母三度类。单元音韵母由单元音构成，有a、o、e、ê、i、u、ü、问-i[¹](前i)和-i[ι](后i)、er等十个；复元答音韵母由复元音构成版，有ai、ei、ao、ou、ia、ie、ua、uo、üe、iao、iou、uai、uei等十三个， 因此汉语的发音更加复杂， 使用同样的算法，支持的就差一些。
+
+#### 优化
+
+[代码][i11]里实际上取得是近似第一共振峰F1, 内存的参数实际上参考了[一种基于共振峰分析的语音驱动人脸动画方法][i3]论文里的数据， 实际上男、女的元音区间对应的频率还是一些小的差别， 读者可以根据下面的表格数据，进一步优化模型。
+
+![](/img/post-vr/mou8.jpg)
+
+[formant-analyzer][i17]项目中对元音(英语中包含长元音和短元音)和共振峰关系的可视化显示：
+
+
+![](/img/post-vr/mou9.jpg)
+
+还有对第一共振峰F1的判定算法是找一个递增的峰值，且其下一个峰值的不高于记录的峰值，即判定为F1， 实际上有可能这两个峰值都不是F1，后面还会实现线性预测技术(LPC)、倒谱法来求峰值， 并对比数据和效果以实现更一步的优化。
+
+
+## 神经网络提取音素
+
+我们的想法很直接，就是基于音频生成口型动画，或者说，输入是一段音频，经过我们的系统，输出为相应的口型动画。而如果先忽略音频和动画的时序，问题就变成了将音频关键帧经过一个深度神经网络，得到一个口型关键帧。
+
+### 特征表示
+
+__音频特征__
+
+对于问题1，我们先说音频特征。这里我们采用的音频特征是语音识别领域内常用的梅尔频率倒谱系数（MFCCs）。梅尔频率倒谱系数是受人的听觉系统研究成果推动而导出的声学特征，它对于声音信号处理更接近人耳对声音的分析特性，能够准确的描述语音短时功率谱的包络，从而很好的反应出声道形状。
+
+
+![](/img/post-vr/mou2.jpg)
+
+
+在特征提取过程中，我们先以20ms的帧长和10ms的帧移对音频进行分帧处理，并计算每个音频帧的梅尔频率倒谱系数（系数个数为M=13）。计算完音频帧的梅尔频率倒谱系数后，我们还获取了它的一阶差分系数和二阶差分系数。该差分系数用来描述动态特征，即声学特征在相邻特征间的变化情况。
+
+经过上述处理之后，针对每个音频帧，我们都有一个13x3维的梅尔频率倒谱特征，用于描述当前音频帧的包络和声学特征的变化信息。理论上，我们可以直接用它来表示口型帧对应的音频帧，但为了更准确的捕获音频的上下文信息，我们在实际处理时会以口型帧对应的音频帧为中心，选取前后共N=16帧的音频帧的梅尔频率倒谱特征作为当前音频帧的特征。这样，我们最终的音频特征就是一个16x13x3维的特征了。
+
+
+__口型特征__
+
+有了音频特征，接下来就是口型特征了。这里，我们参考  提取出40个通用音素的权重作为口型帧的表示。在具体实现时，我们按发音口型将40个音素分为了11个音素组，并针对每个音素组制作其相应的嘴型。值得一提的是，音素组数目的选取和嘴型的制作方法（基于骨骼动画或者基于BlendShape）可由使用者自行选定，这里并不会影响底层算法的实现
+
+![](/img/post-vr/mou3.jpg)
+
+### 网络架构
+
+该如何搭建网络呢？这里我们参考了Karras等人在SIGGRAPH 2017的论文 [Audio driven Facial Animation by Joint End-to-end Learning of Pose and Emotion][i1] 中的工作，搭建了下图所示的网络架构。
+
+
+![](/img/post-vr/mou4.jpg)
+
+该架构由输入层、谱分析网络、协同发音网络和输出层等四部分组成。输入层接受音频特征，并通过不含激活函数的卷积层做初始变换。然后谱分析网络在谱特征维度上对特征进行分析。紧接着，协同发音网络在时域上对提取的特征做进一步分析。最后，输出层通过1x1的卷积核将特征映射成口型特征。网络的详细配置见表。
+
+
+![](/img/post-vr/mou5.jpg)
+
+### 数据集
+
+实验中，我们采用了LibriSpeech和AISHELL两个大型语料数据集，其中英文音频要多于中文音频，这也使得系统对于英文的口型合成的效果要略好于中文。两个数据集上，音频特征的提取是通过我们编写的代码得到的，而口型特征的提取则分为两个部分：针对英文音频，40个音素权重是利用第三方SDK [Annosoft][i9]生成的。针对中文音频，这40个音素权重是本组基于Annosoft进行改进优化之后重新生成的。
+
+那我们为什么不直接使用第三方SDK制作口型动画呢？主要原因有两点：
+
+* 这两种方法均需要字幕文件（[Annosoft][i9]提供不带字幕的音素标注方法，但效果很差）。
+* 这两种方法针对不同语种音频的音素标注需要的配置文件不相同，操作比较繁琐。而我们的系统针对中英文音频的音素标注可使用同一套配置，且仅需音频文件就可合成高质量的嘴型动画。
+
+<iframe src="//player.bilibili.com/player.html?aid=59708647&bvid=BV1st41137L5&cid=104010639&page=1" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true"  style="width: 100%;height: 400px;"> </iframe>
+*Lipsync官方自动口型插件*
+
+### 效果
+
+在引擎中显示的效果如下:
+
+<video id="video" controls="" preload="none" poster="/img/post-vr/mou6.jpg" width="674" height="379">
+      <source id="mp4" src="/img/post-vr/mou1.mp4" type="video/mp4">
+      <p>Your user agent does not support the HTML5 Video element.</p>
+</video>
+
+
+## 总结
+
+我们实现了一套口型动画合成系统，该系统利用深度学习完成从语音到口型动画的映射，可以有效解决语音动画同步的难题，增强动画的真实感和逼真性。同时，该系统对于说话人和语言不敏感，对于中英文的支持普遍好于市面上的同类产品。此外，该系统由于只需要音频文件，所以极大的简化了口型动画的制作流程，减少了相关的时间成本和人员开销。
+
+当然，该系统还存在一定的局限性，具体表现为两方面：
+
+1、该系统没有对人说话时的情绪和说话风格做特殊处理，这导致带情绪和不带情绪说话时合成的口型动画区别不明显，其主要原因是样本数据中带情绪的音频过少，难以提取出情绪特征。
+
+2、该系统暂时无法根据音频内容生成相应的表情动画，这主要是由于相比于口型动画，表情动画的制作会简单得多，也就没有成为我们的研究重点。需要说明的是，我们的系统支持二次编辑，允许用户在口型动画的基础上添加表情。
+
+最后，该系统现已集成到Unity插件中，并被用于主机项目中。我们可以提供全套的口型动画生成支持或者根据现有的口型制作流程调整适配我们的口型动画生成系统，感兴趣的同学欢迎联系我们，一起交流，共同进步。
+
+___参考文献___:
+
+* [SoX — 音频处理工具里的瑞士军刀][i18]
+* [Audio-Driven-Facial-Animation][i1]
+* [跟脸有关的最新玩法是你说什么，表情包就演什么][i2]
+* [一种基于共振峰分析的语音驱动人脸动画方法][i3]
+* [基于机器学习的语音驱动人脸动画方法][i4]
+* [人脸表情动画与语音的典型相关性分析][i5]
+* [基于汉语驱动人脸语音动画的研究][i6]
+* [基于参数控制的语音驱动唇形同步人脸动画][i7]
+* [AE嘴唇自动口型动画][i8]
+* [lipsync-sdks annosoft][i10]
+* [详解离散余弦变换（DCT）][i12]
+* [高斯滤波 百度百科][i13]
+* [海明窗 百度百科][i14]
+* [共振峰频率 ppt 百度文库][i15]
+* [unity-audio-spectrum 算法源码][i16]
+
+
+[i1]: https://research.nvidia.com/publication/2017-07_Audio-Driven-Facial-Animation
+[i2]: https://www.sohu.com/a/197252744_468636
+[i3]: http://qikan.cqvip.com/Qikan/Article/ReadIndex?id=30550592&info=knwEXTMddsIiB765E2wuYrw3l7hqQdL4BdXPQHeU61w=
+[i4]: https://www.doc88.com/p-5520157935.html
+[i5]: http://qikan.cqvip.com/Qikan/Article/ReadIndex?id=37684952&info=4ts9VpOmD2kiSp7n5pJMv4Zd9Fqnm/QTG+NT+2rs9eo=
+[i6]: https://www.doc88.com/p-7582360137704.html
+[i7]: https://www.doc88.com/p-7088944526128.html
+[i8]: http://www.gfxcamp.com/auto-lip-sync-107
+[i9]: http://www.annosoft.com/index
+[i10]: http://www.annosoft.com/lipsync-sdks
+[i11]: https://github.com/huailiang/LipSync
+[i12]: https://www.cnblogs.com/wyuzl/p/7880124.html
+[i13]: https://blog.csdn.net/jgj123321/article/details/94448463
+[i14]: https://baike.baidu.com/item/%E6%B5%B7%E6%98%8E%E7%AA%97/8696634?fr=aladdin
+[i15]: https://wenku.baidu.com/view/a290cf57996648d7c1c708a1284ac850ad020422.html
+[i16]: https://github.com/keijiro/unity-audio-spectrum
+[i17]: https://github.com/fulldecent/formant-analyzer/
+[i18]: https://www.jianshu.com/p/be8977de4a6b

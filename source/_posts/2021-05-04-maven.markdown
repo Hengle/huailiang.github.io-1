@@ -1,0 +1,220 @@
+---
+layout:     post
+title:      "AndroidStudio搭建本地Maven仓库"
+date:       2021-05-04 02:00:00
+author:     "huailiang"
+tags:
+    - 引擎
+---
+
+
+## 发布本地库流程如下：
+
+#### 一、新建一个Android项目
+
+在项目下创建一个Libary（如果直接在Android项目下发布到本地仓库会生成apk包，而lib下生成的是aar包可以作为依赖使用）。
+
+![](/img/post-android/mav1.jpg)
+
+#### 二、配置参数
+
+在Library也就是刚才创建的AndroidLib下的中添加配置 maven-release-aar.gradle
+
+maven-release-aar.gradle 就是用来设置打包的脚本，在文件中添加如下代码
+
+```groovy
+apply plugin: 'maven'
+
+uploadArchives {
+    repositories.mavenDeployer {
+        repository(url: uri('/tmp/maven-release'))
+
+        pom.project {
+            groupId 'com'
+            artifactId 'math3d'
+            version '1.0.5'
+        }
+    }
+}
+
+//以下代码会生成 jar 包源文件，如果是不开源码，请不要输入这段
+//aar 包内包含注释
+task androidSourcesJar(type: Jar) {
+    from android.sourceSets.main.java.sourceFiles
+}
+
+artifacts {
+    archives androidSourcesJar
+}
+```
+
+
+也可以通过maven-publish方式发布
+
+```groovy
+apply plugin: 'maven-publish'
+
+uploadArchives {
+    repositories.mavenDeployer {
+        repository(url: uri('/tmp/maven-release'))
+        pom.project {
+            groupId 'com'
+            artifactId 'math3d'
+            version '1.0.5'
+        }
+    }
+}
+
+task androidSourcesJar(type: Jar) {
+    from android.sourceSets.main.java.sourceFiles
+}
+
+artifacts {
+    archives androidSourcesJar
+}
+```
+
+然后在 Library 的 build.gradle 中增加如下行
+
+```sh
+apply from: 'maven-release-aar.gradle
+```
+
+### 三、发布到本地仓库
+
+#### maven方式命令
+
+```sh
+gradlew  uploadArchives
+```
+
+#### aven-publish方式
+```sh
+gradlew  publishToMavenLocal
+```
+
+#### AS Gradle
+
+在 Android studio 右侧有个 gradle 侧边栏， 双击 uploadArchives也可以上传到仓库
+
+![](/img/post-android/mav2.jpg)
+
+之后就可以在本地的gradle 中指定的路径下可以看到发布的内容了
+
+![](/img/post-android/mav3.jpg)
+
+
+
+### 四、使用本地库
+
+在Android项目下的build.gradle文件中配置路径, 添加如下图配置
+
+
+![](/img/post-android/mav4.jpg)
+
+代码中就可以正常添加引用了:
+
+![](/img/post-android/mav5.jpg)
+
+在Android Studio中所有项目都共用同一个本地缓存库，路径是：C:\Users\用户名\.gradle\caches\modules-2\files-2.1。
+然后通过：包名\模块名\版本号\哈希值\jar或aar文件
+
+例如要找如下依赖的jar或aar：
+
+compile ('com.google.http-client:google-http-client-jackson:1.15.0-rc')
+
+完整路径是：C:\Users\用户名\.gradle\caches\modules-2\files-2.1\com.google.http-client\google-http-client-jackson\1.15.0-rc\哈希值\jar或aar文件
+
+
+### 五. 配置 Maven Web环境
+
+安装 Maven 之前要求先确定JDK 已经安装配置完成。Maven是 Apache 下的一个项目，目前新版本是 3.0.4。
+
+1.首先去官网下载 Maven：http://www.apache.org/dyn/closer.cgi/maven/binaries/apache-maven-3.0.4-bin.tar.gz
+
+2.配置 maven 环境变量：
+
+系统变量：MAVEN_HOME = D:\Development\apache-maven-3.0.4
+
+系统变量：path = %MAVEN_HOME%\bin
+
+mac 系统可以配置在用户目录的.bash_profile 文件中
+
+```sh
+export M2_HOME=~/Documents/software/apache-maven-3.8.1
+export PATH=$M2_HOME/bin:$PATH
+```
+
+配置好之后， source ~/.bash_profile 使环境变量生效。
+
+相信大家都有配过环境变量的，详细步骤就不说了，对着把属性名和属性值配上的OK了。
+
+打开 cmd或者 Terminal(MacOS)，在里面敲：mvn -version
+
+
+![](/img/post-android/mav6.jpg)
+
+
+mvn 是 maven 的一个指令，mvn -version 是查看版本信息，我的操作系统是 32位的 WIN7，安装的 maven 是 3.8.1
+
+如果能打印如上信息，说明到此 Maven3 已经在你的电脑上安装完成。
+
+
+#### 修改 maven 本地仓库存放位置
+
+找到 apache-maven-3.0.4下的 conf 下的 settings.xml 配置文件，我的是在 D:\Development\apache-maven-3.0.4\conf\settings.xml
+
+![](/img/post-android/mav7.jpg)
+
+
+#### maven 使用案例
+
+1.创建简单的maven 的web项目
+    mvn archetype:create 
+    举例：mvn archetype:create  -DgroupId=com.demo.app -DartifactId=demo-app  -DarchetypeArtifactId=maven-archetype-webapp
+
+2.生成和清除Eclipse项目结构：
+   mvn eclipse:eclipse 将maven项目变成eclipse,其实是在项目中生成 .project 和 .classpath 两个文件
+   mvn eclipse:clean 清理（删除target目录下编译内容）
+   mvn clean 打包发布
+
+
+### 附录
+
+
+#### 1.gradlew常用命令
+
+```sh
+./gradlew clean  clean项目
+./gradlew build  构建项目
+./gradlew assembleDebug or /gradlew aD 编译并打Debug包
+./gradlew assembleRelease or /gradlew aR 编译并打Release的包
+./gradlew installRelease or /gradlew iR Release模式打包并安装
+./gradlew installDebug or /gradlew iD Debug模式打包并安装
+./gradlew uninstallRelease or ./gradlew uR 卸载Release模式包
+./gradlew uninstallDebug or ./gradlew uD 卸载Debug模式包
+./gradlew tasks --all  //查看所有任务
+./gradlew dependencies ////依赖信息查看
+./gradlew clean build --refresh-dependencies //强制更新最新依赖，清除并构建
+./gradlew makeJar //生成 jar
+需要说明的是这些命令可以叠加使用，例如：
+./gradlew clean build --info > bugtags.log
+```
+
+#### 2.maven常用命令：
+
+```sh
+mvn clean       清空产生的项目( target里)
+mvn compile     编译源代码
+mvn install     在本地repository中安装jar（包含mvn compile，mvn package，然后上传到本地仓库）
+mvn deploy      上传到私服(包含mvn install,然后，上传到私服)
+mvn package     打包
+mvn test        运行测试
+mvn site        产生site
+mvn test-compile   编译测试代码
+mvn -Dtest package  只打包不测试
+mvn  jar:jar    只打jar包
+mvn  test -skipping compile -skipping test-compile  只测试而不编译，也不测试编译
+mvn  deploy   
+mvn  source.jar   源码打包
+```
